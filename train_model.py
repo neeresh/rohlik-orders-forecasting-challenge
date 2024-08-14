@@ -5,7 +5,10 @@ import numpy as np
 import torch
 from torch import optim, nn
 
-from TSForecasting.utils.tools import EarlyStopping, adjust_learning_rate
+from TSForecasting.utils.tools import EarlyStopping, adjust_learning_rate, test_params_flop, visual
+from TSForecasting.utils.metrics import metric
+
+setting = 'orders_forecasting'
 
 
 def _select_optimizer(args, model):
@@ -18,11 +21,41 @@ def _select_criterion():
     return criterion
 
 
-def train(args, model, train_data, train_loader, device='cuda'):
+def vali(args, model, vali_data, vali_loader, criterion, device='cuda'):
+    total_loss = []
+    model.eval()
+    with torch.no_grad():
+        for i, (batch_x, batch_y, _, _) in enumerate(vali_loader):
+            batch_x = batch_x.float().to(device)
+            batch_y = batch_y.float().to(device)
 
-    # path = os.path.join(args['checkpoints'], setting)
-    # if not os.path.exists(path):
-    #     os.makedirs(path)
+            if args['use_amp']:
+                with torch.cuda.amp.autocast():
+                    outputs = model(batch_x)
+            else:
+                outputs = model(batch_x)
+
+            f_dim = -1 if args['features'] == 'MS' else 0
+            outputs = outputs[:, -args['pred_len']:, f_dim:]
+            batch_y = batch_y[:, -args['pred_len']:, f_dim:].to(device)
+
+            pred = outputs.detach().cpu()
+            true = batch_y.detach().cpu()
+
+            loss = criterion(pred, true)
+
+            total_loss.append(loss)
+
+    total_loss = np.average(total_loss)
+    model.train()
+    return total_loss
+
+
+# def train(args, model, train_data, train_loader, val_data, val_loader, test_data, test_loader, device='cuda'):
+def train(args, model, train_data, train_loader, device='cuda'):
+    path = os.path.join(args['checkpoints'], setting)
+    if not os.path.exists(path):
+        os.makedirs(path)
 
     time_now = time.time()
 
@@ -64,8 +97,11 @@ def train(args, model, train_data, train_loader, device='cuda'):
 
                 # print(outputs.shape,batch_y.shape)
                 f_dim = -1 if args['features'] == 'MS' else 0
+                # print(f"train_model() -> f_dim: {f_dim}")
                 outputs = outputs[:, -args['pred_len']:, f_dim:]
                 batch_y = batch_y[:, -args['pred_len']:, f_dim:].to(device)
+                # print(f"train_model() -> batch_y: {batch_y.shape}")
+                # print(batch_y)
                 loss = criterion(outputs, batch_y)
                 train_loss.append(loss.item())
 
@@ -87,8 +123,8 @@ def train(args, model, train_data, train_loader, device='cuda'):
 
         print("Epoch: {} cost time: {}".format(epoch + 1, time.time() - epoch_time))
         train_loss = np.average(train_loss)
-        # vali_loss = vali(vali_data, vali_loader, criterion)
-        # test_loss = vali(test_data, test_loader, criterion)
+        # vali_loss = vali(args, model, val_data, val_loader, criterion)
+        # test_loss = vali(args, model, test_data, test_loader, criterion)
 
         print("Epoch: {0}, Steps: {1} | Train Loss: {2:.7f}".format(
             epoch + 1, train_steps, train_loss))
@@ -96,6 +132,7 @@ def train(args, model, train_data, train_loader, device='cuda'):
         # print("Epoch: {0}, Steps: {1} | Train Loss: {2:.7f} Vali Loss: {3:.7f} Test Loss: {4:.7f}".format(
         #     epoch + 1, train_steps, train_loss, vali_loss, test_loss))
         # early_stopping(vali_loss, model, path)
+
         if early_stopping.early_stop:
             print("Early stopping")
             break
@@ -106,3 +143,141 @@ def train(args, model, train_data, train_loader, device='cuda'):
     # model.load_state_dict(torch.load('./checkpoints'))
 
     return model
+
+
+def test(args, model, test_loader, load_saved_model=True, device='cuda'):
+
+    if load_saved_model:
+        print('loading model...')
+        model.load_state_dict(torch.load(os.path.join('./checkpoints/' + setting, 'checkpoint.pth')))
+
+    preds = []
+    trues = []
+    inputx = []
+    folder_path = './test_results/' + setting + '/'
+    if not os.path.exists(folder_path):
+        os.makedirs(folder_path)
+
+    model.eval()
+    with torch.no_grad():
+        for i, (batch_x, batch_y, _, _) in enumerate(test_loader):
+            batch_x = batch_x.float().to(device)
+            batch_y = batch_y.float().to(device)
+
+            if args['use_amp']:
+                with torch.cuda.amp.autocast():
+                    outputs = model(batch_x)
+            else:
+                outputs = model(batch_x)
+
+            f_dim = -1 if args['features'] == 'MS' else 0
+            # print(outputs.shape,batch_y.shape)
+            outputs = outputs[:, -args['pred_len']:, f_dim:]
+            batch_y = batch_y[:, -args['pred_len']:, f_dim:].to(device)
+            outputs = outputs.detach().cpu().numpy()
+            batch_y = batch_y.detach().cpu().numpy()
+
+            pred = outputs  # outputs.detach().cpu().numpy()  # .squeeze()
+            true = batch_y  # batch_y.detach().cpu().numpy()  # .squeeze()
+
+            preds.append(pred)
+            trues.append(true)
+            inputx.append(batch_x.detach().cpu().numpy())
+            if i % 20 == 0:
+                input = batch_x.detach().cpu().numpy()
+                gt = np.concatenate((input[0, :, -1], true[0, :, -1]), axis=0)
+                pd = np.concatenate((input[0, :, -1], pred[0, :, -1]), axis=0)
+                visual(gt, pd, os.path.join(folder_path, str(i) + '.pdf'))
+
+    if args['test_flop']:
+        input_x = torch.rand_like(batch_x)
+        test_params_flop(model, (input_x,))
+        exit()
+
+    preds = np.array(preds)
+    trues = np.array(trues)
+    inputx = np.array(inputx)
+
+    # result save
+    if args['do_predict']:
+        folder_path = './Prediction/' + setting + '/'
+        if not os.path.exists(folder_path):
+            os.makedirs(folder_path)
+        np.save(folder_path + 'real_prediction.npy', preds[0])
+        np.save(folder_path + 'origin_series.npy', inputx[0])
+        np.save(folder_path + 'ground_truth.npy', trues[0])
+
+    preds = preds.reshape(-1, preds.shape[-2], preds.shape[-1])
+    trues = trues.reshape(-1, trues.shape[-2], trues.shape[-1])
+    inputx = inputx.reshape(-1, inputx.shape[-2], inputx.shape[-1])
+    mae, mse, rmse, mape, mspe, rse, corr = metric(preds, trues)
+    print('mse:{}, mae:{}, rse:{}'.format(mse, mae, rse))
+    f = open("result.txt", 'a')
+    f.write(setting + "  \n")
+    f.write('mse:{}, mae:{}, rse:{}'.format(mse, mae, rse))
+    f.write('\n')
+    f.write('\n')
+    f.close()
+    # np.save(folder_path + 'metrics.npy', np.array([mae, mse, rmse, mape, mspe, rse, corr]))
+    # np.save(folder_path + 'pred.npy', preds)
+    # np.save(folder_path + 'true.npy', trues)
+    # np.save(folder_path + 'x.npy', inputx)
+    return mse, mae
+
+
+def predict(args, model, pred_data, pred_loader, load_trained_model=False, device='cuda'):
+
+    if load_trained_model:
+        path = os.path.join(args['checkpoints'], setting)
+        best_model_path = path + '/' + 'checkpoint.pth'
+        model.load_state_dict(torch.load(best_model_path))
+
+    preds = []
+    origin_inputs = []
+    ground_truth = []
+    model.eval()
+    with torch.no_grad():
+        for i, (batch_x, batch_y, _, _) in enumerate(pred_loader):
+            batch_x = batch_x.float().to(device)
+            batch_y = batch_y.float().to(device)
+
+            if args['use_amp']:
+                with torch.cuda.amp.autocast():
+                    outputs = model(batch_x)
+            else:
+                outputs = model(batch_x)
+
+            pred = outputs.detach().cpu().numpy()  # .squeeze()
+            preds.append(pred)
+
+            origin_input = batch_x.squeeze().detach().cpu().numpy()
+            origin_inputs.append(origin_input)
+
+            truth = batch_y.squeeze().detach().cpu().numpy()
+            ground_truth.append(truth)
+
+    origin_inputs = np.array(origin_inputs)
+    print(origin_inputs.shape)
+
+    origin_inputs = origin_inputs.reshape(-1, origin_inputs.shape[-2], origin_inputs.shape[-1])
+    print(origin_inputs.shape)
+
+    ground_truth = np.array(ground_truth)
+    print(ground_truth.shape)
+
+    preds = np.array(preds)
+    ground_truth = ground_truth.reshape(-1, ground_truth.shape[-2], ground_truth.shape[-1])
+
+    preds = preds.reshape(-1, preds.shape[-2], preds.shape[-1])
+    print(preds.shape)
+
+    # result save
+    folder_path = './prediction/' + setting + '/'
+    if not os.path.exists(folder_path):
+        os.makedirs(folder_path)
+
+    np.save(folder_path + 'real_prediction.npy', preds)
+    np.save(folder_path + 'origin_series.npy', origin_inputs)
+    np.save(folder_path + 'ground_truth.npy', ground_truth)
+
+    return

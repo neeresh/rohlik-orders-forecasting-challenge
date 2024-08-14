@@ -198,7 +198,7 @@ class Dataset_ETT_minute(Dataset):
 
 class Dataset_Custom(Dataset):
     def __init__(self, root_path, flag, size, features, data_path,
-                 target, scale=False, timeenc=0, freq='h',train_only=False):
+                 target, scale=True, timeenc=0, freq='h', train_only=True):
         # size [seq_len, label_len, pred_len]
         # info
         if size == None:
@@ -281,15 +281,23 @@ class Dataset_Custom(Dataset):
         self.data_stamp = data_stamp
 
     def __getitem__(self, index):
-        s_begin = index
-        s_end = s_begin + self.seq_len
-        r_begin = s_end - self.label_len
-        r_end = r_begin + self.label_len + self.pred_len
+        s_begin = index  # index = 0
+        s_end = s_begin + self.seq_len  # 0 + 2 > s_end=2
+        r_begin = s_end - self.label_len  # 2 - 2 > r_begin = 0
+        r_end = r_begin + self.label_len + self.pred_len  # 0 + 2 + 1  > r_end = 3
 
-        seq_x = self.data_x[s_begin:s_end]
-        seq_y = self.data_y[r_begin:r_end]
-        seq_x_mark = self.data_stamp[s_begin:s_end]
-        seq_y_mark = self.data_stamp[r_begin:r_end]
+        seq_x = self.data_x[s_begin:s_end]  # 0 to 2
+        seq_y = self.data_y[r_begin:r_end]  # 0 to 3
+        seq_x_mark = self.data_stamp[s_begin:s_end]  # 0 to 2
+        seq_y_mark = self.data_stamp[r_begin:r_end]  # 0 to 3
+
+        if index == len(self) - 1:
+            self.last_seq_x = seq_x
+            self.last_seq_y = seq_y
+            self.last_seq_x_mark = seq_x_mark
+            self.last_seq_y_mark = seq_y_mark
+
+            # self.save_last_sequences()
 
         return seq_x, seq_y, seq_x_mark, seq_y_mark
 
@@ -298,6 +306,15 @@ class Dataset_Custom(Dataset):
 
     def inverse_transform(self, data):
         return self.scaler.inverse_transform(data)
+
+    def save_last_sequences(self, save_path='.'):
+        if self.last_seq_x is not None:
+            np.save(os.path.join(save_path, 'last_seq_x.npy'), self.last_seq_x)
+            np.save(os.path.join(save_path, 'last_seq_y.npy'), self.last_seq_y)
+            np.save(os.path.join(save_path, 'last_seq_x_mark.npy'), self.last_seq_x_mark)
+            np.save(os.path.join(save_path, 'last_seq_y_mark.npy'), self.last_seq_y_mark)
+        else:
+            print("No sequences to save. Ensure that __getitem__ has been called to generate the sequences.")
     
 
 class Dataset_Pred(Dataset):

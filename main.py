@@ -1,12 +1,12 @@
 import os
 
+import numpy as np
 import pandas as pd
 import torch
 from sklearn.preprocessing import LabelEncoder
 
 from TSForecasting.data_provider.data_factory import data_provider
-from predict_model import predict
-from train_model import train
+from train_model import train, test, predict
 from TSForecasting.models.ConvTimeNet import Model
 
 
@@ -43,6 +43,29 @@ def preprocess_data(train, test):
     le = LabelEncoder()
     train['warehouse'] = le.fit_transform(train['warehouse'])
     test['warehouse'] = le.transform(test['warehouse'])
+
+    # making target (orders) column as the last column for df
+    if 'orders' in train.columns:
+        cols = [col for col in train.columns if col != 'orders']
+        cols.append('orders')
+        train = train[cols]
+    else:
+        print("Target column 'target' not found in DataFrame.")
+
+    # Making date column as the first column of df
+    if 'date' in train.columns:
+        cols = [col for col in train.columns if col != 'date']
+        cols = ['date'] + cols
+        train = train[cols]
+    else:
+        print("Column 'date' not found in DataFrame.")
+
+    if 'date' in test.columns:
+        cols = [col for col in test.columns if col != 'date']
+        cols = ['date'] + cols
+        test = test[cols]
+    else:
+        print("Column 'date' not found in DataFrame.")
 
     return train, test
 
@@ -81,6 +104,9 @@ def save_train_test_datasets(root_dir, data_path, preprocessing=False, save_data
         print(f"Train set columns: {train.columns}")
         print(f"Test set columns: {test.columns}")
 
+    # Creating a column called "orders" for test set. This won't be used.
+    test['orders'] = 5000
+
     if save_data:
         print(f"Saving processed train and test files...")
         train.to_csv('data/processed/train_set_processed.csv', index=False)
@@ -91,14 +117,20 @@ args = {
 
     # Starters
     'root_dir': '.', 'data_path': 'data/',
+
+    # For train, val and test sets, training data is split into 3 parts
     'train_data_path': 'data/processed/train_set_processed.csv', 'train_flag': 'train',
-    'test_data_path': 'data/processed/test_set_processed.csv', 'test_flag': 'test',
-    'data': 'custom', 'features': 'M', 'target': 'orders',
-    'batch_size': 32, 'freq': 'd', 'seq_len': 8, 'label_len': 0, 'pred_len': 1,
+    'val_data_path': 'data/processed/train_set_processed.csv', 'val_flag': 'val',
+    'test_data_path': 'data/processed/train_set_processed.csv', 'test_flag': 'test',
+
+    # To score unseen data, we use new_data_flag = 'pred'
+    'unseen_data_path': 'data/processed/test_set_processed.csv', 'unseen_data_flag': 'pred',
+    'data': 'custom', 'features': 'MS', 'target': 'orders',
+    'batch_size': 16, 'freq': 'd', 'seq_len': 14, 'label_len': 14, 'pred_len': 20,
     'embed': 'timeF',
 
     # Training params
-    'checkpoints': './checkpoints/', 'patience': 3, 'use_amp': False, 'train_epochs': 2, 'learning_rate': 0.0001,
+    'checkpoints': './checkpoints/', 'patience': 5, 'use_amp': True, 'train_epochs': 2, 'learning_rate': 0.00001,
 
     # Model args
     # enc_in: Number of input features to the model
@@ -111,13 +143,18 @@ args = {
     # re_param_kernel:  Kernel size for the reparameterization.
     # enable_res_param: Whether to enable residual parameterization.
     # head_type: Type of output head used in the model.
-    'enc_in': 14, 'e_layers': 6, 'd_model': 64, 'd_ff': 256, 'dropout': 0.05, 'head_dropout': 0.0,
-    'patch_ks': 3, 'patch_sd': 2, 'padding_patch': 'end', 'revin': 1, 'affine': 0,
-    'subtract_last': 0, 'dw_ks': [3, 4, 5, 6, 7, 8], 're_param': 1, 're_param_kernel': 3,
-    'enable_res_param': 1, 'norm': 'batch', 'act': "gelu", 'head_type': 'flatten'
+    'enc_in': 14, 'e_layers': 6, 'd_model': 128, 'd_ff': 256, 'dropout': 0.05, 'head_dropout': 0.0,
+    'patch_ks': 16, 'patch_sd': 3, 'padding_patch': 'end', 'revin': 1, 'affine': 0,
+    'subtract_last': 0, 'dw_ks': [11, 15, 21, 29, 39, 51], 're_param': 1, 're_param_kernel': 3,
+    'enable_res_param': 1, 'norm': 'batch', 'act': "gelu", 'head_type': 'flatten',
+
+    # Test
+    'test_flop': False, 'do_predict': True,
+
 }
 
 if __name__ == '__main__':
+
     save_train_test_datasets(root_dir=args['root_dir'], data_path=args['data_path'],
                              preprocessing=True, save_data=True)
 
@@ -128,13 +165,29 @@ if __name__ == '__main__':
                                                 seq_len=args['seq_len'], label_len=args['label_len'],
                                                 pred_len=args['pred_len'], embed=args['embed'])
 
-    test_dataset, test_loader = data_provider(root_path=args['root_dir'], data_path=args['test_data_path'],
-                                              flag=args['test_flag'], features=args['features'],
-                                              target=args['target'], data=args['data'],
-                                              batch_size=args['batch_size'], freq=args['freq'],
-                                              seq_len=args['seq_len'], label_len=args['label_len'],
-                                              pred_len=args['pred_len'], embed=args['embed']
-                                              )
+    # val_dataset, val_loader = data_provider(root_path=args['root_dir'], data_path=args['val_data_path'],
+    #                                           flag=args['test_flag'], features=args['features'],
+    #                                           target=args['target'], data=args['data'],
+    #                                           batch_size=args['batch_size'], freq=args['freq'],
+    #                                           seq_len=args['seq_len'], label_len=args['label_len'],
+    #                                           pred_len=args['pred_len'], embed=args['embed']
+    #                                           )
+    #
+    # test_dataset, test_loader = data_provider(root_path=args['root_dir'], data_path=args['test_data_path'],
+    #                                           flag=args['test_flag'], features=args['features'],
+    #                                           target=args['target'], data=args['data'],
+    #                                           batch_size=args['batch_size'], freq=args['freq'],
+    #                                           seq_len=args['seq_len'], label_len=args['label_len'],
+    #                                           pred_len=args['pred_len'], embed=args['embed']
+    #                                           )
+
+    # unseen_dataset, unseen_loader = data_provider(root_path=args['root_dir'], data_path=args['unseen_data_path'],
+    #                                           flag=args['unseen_data_flag'], features=args['features'],
+    #                                           target=args['target'], data=args['data'],
+    #                                           batch_size=args['batch_size'], freq=args['freq'],
+    #                                           seq_len=args['seq_len'], label_len=args['label_len'],
+    #                                           pred_len=args['pred_len'], embed=args['embed']
+    #                                           )
 
     model = Model(enc_in=args['enc_in'], seq_len=args['seq_len'], pred_len=args['pred_len'],
                   e_layers=args['e_layers'], d_model=args['d_model'], d_ff=args['d_ff'],
@@ -146,7 +199,27 @@ if __name__ == '__main__':
                   re_param_kernel=args['re_param_kernel'],
                   enable_res_param=args['enable_res_param'])
 
+    # model = train(args, model, train_dataset, train_loader, val_dataset, val_loader,
+    #               test_dataset, test_loader)
     model = train(args, model, train_dataset, train_loader)
-    save_model(model, model_name=f"./checkpoints/orders_forecasting.pkl")
 
-    predict(args, model, test_dataset, test_loader)
+    # Saving extra timesteps for evaluation
+    original_train_set = pd.read_csv('data/processed/train_set_processed.csv')
+    original_test_set = pd.read_csv('data/processed/test_set_processed.csv')
+
+    modified_test_set = pd.concat([original_train_set.iloc[-args['seq_len']:, :], original_test_set], ignore_index=True)
+    modified_test_set.to_csv('data/processed/test_set_processed_modified.csv', index=False)
+
+    unseen_data, unseen_loader = data_provider(root_path=args['root_dir'],
+                                               data_path='data/processed/test_set_processed_modified.csv',
+                                               flag=args['unseen_data_flag'], features=args['features'],
+                                               target=args['target'], data=args['data'],
+                                               batch_size=1, freq=args['freq'],
+                                               seq_len=args['seq_len'], label_len=args['label_len'],
+                                               pred_len=args['pred_len'], embed=args['embed']
+                                               )
+
+    predict(args, model, unseen_data, unseen_loader)
+
+    # # Testing the trained model
+    # test(args, model, test_loader, load_saved_model=True)

@@ -32,7 +32,7 @@ def data_provider(root_path, data_path, flag, features, target, data, batch_size
         freq = freq
         Data = Dataset_Pred
     else:
-        shuffle_flag = True
+        shuffle_flag = False  # True
         drop_last = True
         batch_size = batch_size
         freq = freq
@@ -53,6 +53,6 @@ def data_provider(root_path, data_path, flag, features, target, data, batch_size
         batch_size = len(data_set)
 
     data_loader = DataLoader(data_set, batch_size=batch_size, shuffle=shuffle_flag,
-                             num_workers=4, drop_last=drop_last)
+                             num_workers=1, drop_last=drop_last)
 
     return data_set, data_loader
