@@ -126,7 +126,7 @@ args = {
     # To score unseen data, we use new_data_flag = 'pred'
     'unseen_data_path': 'data/processed/test_set_processed.csv', 'unseen_data_flag': 'pred',
     'data': 'custom', 'features': 'MS', 'target': 'orders',
-    'batch_size': 16, 'freq': 'd', 'seq_len': 14, 'label_len': 14, 'pred_len': 20,
+    'batch_size': 16, 'freq': 'd', 'seq_len': 14, 'label_len': 14, 'pred_len': 1,
     'embed': 'timeF',
 
     # Training params
@@ -212,7 +212,7 @@ if __name__ == '__main__':
 
     unseen_data, unseen_loader = data_provider(root_path=args['root_dir'],
                                                data_path='data/processed/test_set_processed_modified.csv',
-                                               flag=args['unseen_data_flag'], features=args['features'],
+                                               flag='train', features=args['features'],
                                                target=args['target'], data=args['data'],
                                                batch_size=1, freq=args['freq'],
                                                seq_len=args['seq_len'], label_len=args['label_len'],
